@@ -1,0 +1,556 @@
+// Prisma Schema for Multi-Tenant Athlete Attendance Tracking
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ORGANIZATION & TENANT MANAGEMENT
+// ============================================
+
+model Organization {
+  id       String    @id @default(cuid())
+  name     String
+  slug     String    @unique // URL-friendly identifier
+  timezone String    @default("America/New_York")
+  status   OrgStatus @default(ACTIVE)
+
+  // Subscription & billing
+  planTier    PlanTier @default(BASIC)
+  maxAthletes Int?
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  users             User[]
+  athletes          Athlete[]
+  programs          Program[]
+  sessions          Session[]
+  attendanceRecords AttendanceRecord[]
+  membershipPlans   MembershipPlan[]
+
+  @@index([slug])
+  @@index([status])
+}
+
+enum OrgStatus {
+  ACTIVE
+  SUSPENDED
+  TRIAL
+  CANCELLED
+}
+
+enum PlanTier {
+  BASIC
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+// ============================================
+// USER MANAGEMENT (Linked to Cognito)
+// ============================================
+
+model User {
+  id        String   @id @default(cuid())
+  cognitoId String   @unique // AWS Cognito user ID
+  email     String
+  firstName String?
+  lastName  String?
+  role      UserRole
+
+  // Multi-tenant
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Metadata
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lastLoginAt DateTime?
+
+  // Relations
+  createdSessions        Session[]          @relation("SessionCreator")
+  attendanceRecordsTaken AttendanceRecord[] @relation("AttendanceTaker")
+  parentRelationships    ParentAthlete[]    @relation("ParentUser")
+
+  @@unique([email, organizationId])
+  @@index([cognitoId])
+  @@index([organizationId])
+  @@index([email])
+}
+
+enum UserRole {
+  SUPER_ADMIN // Platform admin
+  ORG_ADMIN // Organization owner
+  COACH // Can manage athletes and attendance
+  STAFF // Can take attendance only
+  PARENT // Can view own children's data only
+  VIEWER // Read-only access
+}
+
+// ============================================
+// ATHLETE MANAGEMENT
+// ============================================
+
+model Athlete {
+  id String @id @default(cuid())
+
+  // Personal info
+  firstName   String
+  lastName    String
+  email       String?
+  phone       String?
+  dateOfBirth DateTime?
+  gender      Gender?
+
+  // Athletic info
+  sport      String?
+  skillLevel SkillLevel?
+
+  // Status & engagement
+  status    AthleteStatus @default(ACTIVE)
+  startDate DateTime      @default(now())
+  endDate   DateTime?
+
+  // Multi-tenant
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Emergency contact
+  emergencyContactName  String?
+  emergencyContactPhone String?
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  attendanceRecords   AttendanceRecord[]
+  programEnrollments  ProgramEnrollment[]
+  memberships         Membership[]
+  notes               AthleteNote[]
+  parentRelationships ParentAthlete[]     @relation("ChildAthlete")
+
+  @@unique([email, organizationId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([lastName, firstName])
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum SkillLevel {
+  NONE
+  RECREATIONAL
+  INVITATIONAL
+  PROVINCIAL
+  NATIONAL
+  ELITE
+}
+
+enum AthleteStatus {
+  ACTIVE // Currently enrolled
+  INACTIVE // Temporarily not attending
+  SUSPENDED // Suspended by organization
+  CHURNED // Left permanently
+  PROSPECT // Not yet enrolled
+}
+
+// ============================================
+// PARENT-ATHLETE RELATIONSHIPS
+// ============================================
+
+model ParentAthlete {
+  id String @id @default(cuid())
+
+  // Parent (User with PARENT role)
+  parentId String
+  parent   User   @relation("ParentUser", fields: [parentId], references: [id], onDelete: Cascade)
+
+  // Athlete (Child)
+  athleteId String
+  athlete   Athlete @relation("ChildAthlete", fields: [athleteId], references: [id], onDelete: Cascade)
+
+  // Relationship type
+  relationshipType RelationshipType @default(PARENT)
+
+  // Primary contact flag
+  isPrimaryContact Boolean @default(false)
+
+  // Permissions
+  canViewAttendance Boolean @default(true)
+  canViewBilling    Boolean @default(true)
+  canUpdateProfile  Boolean @default(false)
+  canCancelSessions Boolean @default(false)
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([parentId, athleteId])
+  @@index([parentId])
+  @@index([athleteId])
+  @@index([isPrimaryContact])
+}
+
+enum RelationshipType {
+  PARENT
+  GUARDIAN
+  RELATIVE
+  AUTHORIZED_ADULT
+}
+
+// ============================================
+// PROGRAMS & TRAINING STRUCTURE
+// ============================================
+
+model Program {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  sport       String?
+  ageGroupMin Int?
+  ageGroupMax Int?
+
+  // Scheduling
+  isActive Boolean @default(true)
+
+  // Multi-tenant
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  enrollments ProgramEnrollment[]
+  sessions    Session[]
+
+  @@index([organizationId])
+  @@index([isActive])
+}
+
+model ProgramEnrollment {
+  id String @id @default(cuid())
+
+  athleteId String
+  athlete   Athlete @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  programId String
+  program   Program @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  enrolledAt DateTime         @default(now())
+  endedAt    DateTime?
+  status     EnrollmentStatus @default(ACTIVE)
+
+  @@unique([athleteId, programId, enrolledAt])
+  @@index([athleteId])
+  @@index([programId])
+  @@index([status])
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  DROPPED
+}
+
+// ============================================
+// SESSIONS & ATTENDANCE
+// ============================================
+
+model Session {
+  id String @id @default(cuid())
+
+  // Session details
+  name           String?
+  scheduledStart DateTime
+  scheduledEnd   DateTime
+  actualStart    DateTime?
+  actualEnd      DateTime?
+
+  // Program link (optional - some sessions may not be program-specific)
+  programId String?
+  program   Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
+
+  // Location
+  location String?
+
+  // Capacity
+  maxCapacity Int?
+
+  // Status
+  status             SessionStatus @default(SCHEDULED)
+  cancellationReason String?
+
+  // Multi-tenant
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Creator
+  createdById String
+  createdBy   User   @relation("SessionCreator", fields: [createdById], references: [id])
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  attendanceRecords AttendanceRecord[]
+
+  @@index([organizationId])
+  @@index([scheduledStart])
+  @@index([programId])
+  @@index([status])
+}
+
+enum SessionStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model AttendanceRecord {
+  id String @id @default(cuid())
+
+  // Core attendance data
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  athleteId String
+  athlete   Athlete @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  // Attendance status
+  status AttendanceStatus
+
+  // Timing data (crucial for ML analysis)
+  markedAt  DateTime  @default(now())
+  arrivedAt DateTime?
+  leftAt    DateTime?
+
+  // Additional context
+  notes        String?
+  excuseReason String?
+
+  // Multi-tenant
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Who recorded this attendance
+  recordedById String?
+  recordedBy   User?   @relation("AttendanceTaker", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sessionId, athleteId])
+  @@index([athleteId])
+  @@index([sessionId])
+  @@index([status])
+  @@index([organizationId])
+  @@index([markedAt])
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+  PARTIAL // Left early or arrived late but participated
+}
+
+// ============================================
+// MEMBERSHIP & BILLING (for churn analysis)
+// ============================================
+
+model MembershipPlan {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+
+  // Pricing
+  price        Decimal      @db.Decimal(10, 2)
+  billingCycle BillingCycle
+
+  // Sessions
+  sessionsPerCycle Int? // null = unlimited
+
+  // Multi-tenant
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  isActive Boolean @default(true)
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  memberships Membership[]
+
+  @@index([organizationId])
+  @@index([isActive])
+}
+
+enum BillingCycle {
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  ANNUAL
+  ONE_TIME
+}
+
+model Membership {
+  id String @id @default(cuid())
+
+  athleteId String
+  athlete   Athlete @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  planId String
+  plan   MembershipPlan @relation(fields: [planId], references: [id])
+
+  // Lifecycle
+  startDate DateTime
+  endDate   DateTime?
+  status    MembershipStatus @default(ACTIVE)
+
+  // Payment tracking (for churn prediction)
+  lastPaymentDate DateTime?
+  nextPaymentDate DateTime?
+  paymentFailures Int       @default(0)
+
+  // Cancellation tracking
+  cancellationDate      DateTime?
+  cancellationReason    String?
+  cancellationInitiator CancellationInitiator?
+
+  // Auto-renewal
+  autoRenew Boolean @default(true)
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([athleteId])
+  @@index([status])
+  @@index([nextPaymentDate])
+}
+
+enum MembershipStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+  EXPIRED
+  PENDING
+}
+
+enum CancellationInitiator {
+  ATHLETE
+  ORGANIZATION
+  PAYMENT_FAILURE
+  SYSTEM
+}
+
+// ============================================
+// NOTES & COMMUNICATION
+// ============================================
+
+model AthleteNote {
+  id String @id @default(cuid())
+
+  athleteId String
+  athlete   Athlete @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  content  String   @db.Text
+  noteType NoteType @default(GENERAL)
+
+  // Flag for important notes
+  isPinned Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([athleteId])
+  @@index([noteType])
+  @@index([createdAt])
+}
+
+enum NoteType {
+  GENERAL
+  INJURY
+  BEHAVIOR
+  PERFORMANCE
+  COMMUNICATION
+}
+
+// ============================================
+// MATERIALIZED VIEWS FOR ML & ANALYTICS
+// ============================================
+
+// This would be created as a PostgreSQL view or computed periodically
+// Keeping as a model for Prisma compatibility, but you'd populate this via queries
+
+model AthleteEngagementMetrics {
+  id             String @id @default(cuid())
+  athleteId      String @unique
+  organizationId String
+
+  // Attendance metrics (last 30 days)
+  totalSessionsLast30d    Int
+  attendedSessionsLast30d Int
+  attendanceRateLast30d   Decimal @db.Decimal(5, 2)
+
+  // Attendance metrics (last 90 days)
+  totalSessionsLast90d    Int
+  attendedSessionsLast90d Int
+  attendanceRateLast90d   Decimal @db.Decimal(5, 2)
+
+  // Engagement trends
+  consecutiveAbsences    Int
+  longestStreak          Int
+  averageSessionsPerWeek Decimal @db.Decimal(5, 2)
+
+  // Timing patterns
+  lateArrivalsLast30d    Int
+  earlyDeparturesLast30d Int
+
+  // Gaps & patterns
+  daysSinceLastAttendance Int?
+  longestGapInDays        Int?
+
+  // Payment health (from membership)
+  daysSinceLastPayment Int?
+  paymentFailureCount  Int
+
+  // Churn risk score (0-100, computed by ML model)
+  churnRiskScore    Decimal?   @db.Decimal(5, 2)
+  churnRiskCategory ChurnRisk?
+
+  // Last computed
+  computedAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([churnRiskScore])
+  @@index([athleteId])
+}
+
+enum ChurnRisk {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}

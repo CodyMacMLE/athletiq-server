@@ -1,0 +1,143 @@
+# ============================
+# ORGANIZATION & USERS
+# ============================
+
+type Organization {
+  id: ID!
+  name: String!
+  slug: String!
+  timezone: String!
+  status: OrgStatus!
+  planTier: PlanTier!
+  maxAthletes: Int
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  athletes: [Athlete!]!
+  users: [User!]!
+  programs: [Program!]!
+}
+
+enum OrgStatus {
+  ACTIVE
+  SUSPENDED
+  TRIAL
+  CANCELLED
+}
+
+enum PlanTier {
+  BASIC
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+type User {
+  id: ID!
+  email: String!
+  firstName: String
+  lastName: String
+  role: UserRole!
+  organizationId: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ORG_ADMIN
+  COACH
+  STAFF
+  PARENT
+  VIEWER
+}
+
+# ============================
+# ATHLETES & ATTENDANCE
+# ============================
+
+type Athlete {
+  id: ID!
+  firstName: String!
+  lastName: String!
+  email: String
+  status: AthleteStatus!
+  skillLevel: SkillLevel
+  organizationId: String!
+  attendanceRecords: [AttendanceRecord!]!
+}
+
+enum AthleteStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  CHURNED
+  PROSPECT
+}
+
+enum SkillLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  ELITE
+}
+
+type AttendanceRecord {
+  id: ID!
+  athleteId: String!
+  sessionId: String!
+  status: AttendanceStatus!
+  markedAt: DateTime!
+  arrivedAt: DateTime
+  leftAt: DateTime
+  recordedBy: User
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+  PARTIAL
+}
+
+# ============================
+# PROGRAMS & SESSIONS
+# ============================
+
+type Program {
+  id: ID!
+  name: String!
+  sport: String
+  isActive: Boolean!
+  organizationId: String!
+  sessions: [Session!]!
+}
+
+type Session {
+  id: ID!
+  name: String
+  scheduledStart: DateTime!
+  scheduledEnd: DateTime!
+  status: SessionStatus!
+  program: Program
+  attendanceRecords: [AttendanceRecord!]!
+}
+
+enum SessionStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+# ============================
+# ROOT QUERY
+# ============================
+
+type Query {
+  organizations: [Organization!]!
+  organizationBySlug(slug: String!): Organization
+  usersByOrganization(orgId: String!): [User!]!
+  athletesByOrganization(orgId: String!): [Athlete!]!
+  sessionsByProgram(programId: String!): [Session!]!
+  attendanceByAthlete(athleteId: String!): [AttendanceRecord!]!
+}
